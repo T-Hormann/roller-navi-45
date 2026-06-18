@@ -225,7 +225,7 @@ async function route(){
   try {
     const res = await fetch(ORS_BASE, {
       method:"POST",
-      headers:{ "Authorization": key, "Content-Type":"application/json", "Accept":"application/json" },
+      headers:{ "Authorization": key, "Content-Type":"application/json", "Accept":"application/geo+json" },
       body: JSON.stringify(body)
     });
     if(res.status === 403 || res.status === 401){ toast("API-Key ungültig."); openSettings(); return; }
