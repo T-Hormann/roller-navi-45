@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1b5e20">
+<title>Roller-Navi 45</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root { --green:#1b5e20; --green-light:#2e7d32; --bg:#f4f6f4; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; padding:0; height:100%; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); }
+  #app { display:flex; flex-direction:column; height:100dvh; }
+
+  header { background:var(--green); color:#fff; padding:10px 14px; display:flex; align-items:center; gap:8px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; flex:1; }
+  header .gear { background:none; border:none; color:#fff; font-size:20px; padding:4px 6px; cursor:pointer; }
+
+  .search-bar { padding:10px 12px; background:#fff; border-bottom:1px solid #e0e0e0; position:relative; }
+  .search-bar input { width:100%; padding:12px 14px; font-size:16px; border:1px solid #cfd8cf; border-radius:10px; outline:none; }
+  .search-bar input:focus { border-color:var(--green-light); }
+  .suggestions { position:absolute; left:12px; right:12px; top:60px; background:#fff; border:1px solid #e0e0e0; border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,.12); z-index:1200; max-height:240px; overflow-y:auto; }
+  .suggestions div { padding:12px 14px; font-size:14px; border-bottom:1px solid #f0f0f0; cursor:pointer; }
+  .suggestions div:last-child { border-bottom:none; }
+  .suggestions div:active { background:#eef5ee; }
+
+  #map { flex:1; width:100%; z-index:1; }
+
+  .route-info { background:#fff; border-top:1px solid #e0e0e0; padding:0; max-height:42vh; display:flex; flex-direction:column; transform:translateY(0); }
+  .route-info.hidden { display:none; }
+  .route-summary { display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid #eee; }
+  .route-summary .big { font-size:22px; font-weight:700; color:var(--green); }
+  .route-summary .sub { font-size:13px; color:#555; }
+  .route-summary .close { margin-left:auto; background:#eee; border:none; border-radius:50%; width:30px; height:30px; font-size:16px; cursor:pointer; }
+  .steps { overflow-y:auto; padding:4px 0; }
+  .step { padding:11px 16px; font-size:14px; border-bottom:1px solid #f3f3f3; display:flex; gap:10px; }
+  .step .dist { color:#888; font-size:12px; min-width:54px; text-align:right; }
+
+  .fab { position:absolute; right:14px; bottom:90px; z-index:1100; display:flex; flex-direction:column; gap:10px; }
+  .fab button { width:48px; height:48px; border-radius:50%; border:none; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.25); font-size:20px; cursor:pointer; }
+  .fab button.go { background:var(--green); color:#fff; }
+
+  .banner { background:#fff8e1; color:#7a5c00; font-size:12px; padding:8px 14px; border-bottom:1px solid #f0e3b0; }
+
+  /* Settings modal */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:2000; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .modal.hidden { display:none; }
+  .modal .card { background:#fff; border-radius:14px; padding:20px; width:100%; max-width:420px; }
+  .modal h2 { margin:0 0 6px; font-size:18px; }
+  .modal p { font-size:13px; color:#555; line-height:1.5; }
+  .modal a { color:var(--green-light); }
+  .modal input { width:100%; padding:12px; font-size:15px; border:1px solid #cfd8cf; border-radius:10px; margin:8px 0; }
+  .modal .actions { display:flex; gap:10px; margin-top:8px; }
+  .modal button { flex:1; padding:12px; font-size:15px; border:none; border-radius:10px; cursor:pointer; }
+  .modal .save { background:var(--green); color:#fff; }
+  .modal .cancel { background:#eee; }
+
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#333; color:#fff; padding:12px 18px; border-radius:24px; font-size:14px; z-index:3000; opacity:0; transition:opacity .3s; max-width:90%; text-align:center; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🛵 Roller-Navi 45</h1>
+    <button class="gear" id="btnSettings" title="Einstellungen">⚙️</button>
+  </header>
+
+  <div class="banner">Vermeidet Autobahnen &amp; Kraftfahrtstraßen. Achte trotzdem auf die Beschilderung (Zeichen 330/331).</div>
+
+  <div class="search-bar">
+    <input id="dest" type="text" placeholder="Ziel eingeben (z. B. Marktplatz, Köln)" autocomplete="off">
+    <div class="suggestions hidden" id="suggestions"></div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="fab">
+    <button id="btnLocate" title="Mein Standort">📍</button>
+    <button class="go" id="btnRoute" title="Route berechnen">▶</button>
+  </div>
+
+  <div class="route-info hidden" id="routeInfo">
+    <div class="route-summary">
+      <div>
+        <div class="big" id="rDist">–</div>
+        <div class="sub" id="rTime">–</div>
+      </div>
+      <button class="close" id="btnCloseRoute">✕</button>
+    </div>
+    <div class="steps" id="steps"></div>
+  </div>
+</div>
+
+<!-- Settings modal -->
+<div class="modal hidden" id="settings">
+  <div class="card">
+    <h2>OpenRouteService-API-Key</h2>
+    <p>Damit Routen berechnet werden können, brauchst du einen kostenlosen Schlüssel:</p>
+    <p>1. Gehe auf <a href="https://account.heigit.org/signup" target="_blank" rel="noopener">openrouteservice.org → Sign up</a><br>
+       2. Bestätige deine E-Mail und logge dich ein<br>
+       3. Unter „Dashboard → Tokens" einen Token erstellen<br>
+       4. Den Token hier einfügen.</p>
+    <p style="color:#7a5c00;">Der Schlüssel wird nur lokal auf diesem Gerät gespeichert.</p>
+    <input id="apiKeyInput" type="text" placeholder="API-Key einfügen…" autocomplete="off">
+    <div class="actions">
+      <button class="cancel" id="btnCancelKey">Abbrechen</button>
+      <button class="save" id="btnSaveKey">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+const ORS_BASE = "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
+const NOMINATIM = "https://nominatim.openstreetmap.org/search";
+
+let map, startMarker, destMarker, routeLayer;
+let startLatLng = null;   // [lat, lon]
+let destLatLng = null;    // [lat, lon]
+let suggestTimer = null;
+
+// ---------- Helpers ----------
+function getKey(){ return localStorage.getItem("orsKey") || ""; }
+function toast(msg, ms=2600){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._tm); t._tm = setTimeout(()=>t.classList.remove("show"), ms);
+}
+function fmtDist(m){ return m >= 1000 ? (m/1000).toFixed(1).replace(".",",")+" km" : Math.round(m)+" m"; }
+function fmtDur(s){
+  const min = Math.round(s/60);
+  if(min < 60) return min+" Min";
+  const h = Math.floor(min/60), r = min%60;
+  return h+" Std "+r+" Min";
+}
+
+// ---------- Map ----------
+function initMap(){
+  map = L.map("map", { zoomControl:true }).setView([51.0, 10.0], 6);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom:19, attribution:"© OpenStreetMap"
+  }).addTo(map);
+
+  // Tap on map sets destination
+  map.on("click", e => setDest([e.latlng.lat, e.latlng.lng], "Gewählter Punkt"));
+}
+
+function setStart(latlng){
+  startLatLng = latlng;
+  if(startMarker) startMarker.setLatLng(latlng);
+  else startMarker = L.marker(latlng, { title:"Start" }).addTo(map).bindPopup("Start");
+}
+function setDest(latlng, label){
+  destLatLng = latlng;
+  if(destMarker) destMarker.setLatLng(latlng);
+  else destMarker = L.marker(latlng, { title:"Ziel" }).addTo(map);
+  destMarker.bindPopup(label || "Ziel");
+  map.setView(latlng, Math.max(map.getZoom(), 14));
+}
+
+// ---------- Geolocation ----------
+function locate(center=true){
+  if(!navigator.geolocation){ toast("Standort wird nicht unterstützt."); return; }
+  toast("Suche Standort…");
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const ll = [pos.coords.latitude, pos.coords.longitude];
+      setStart(ll);
+      if(center) map.setView(ll, 15);
+      toast("Standort gefunden.");
+    },
+    err => toast("Standort nicht verfügbar: "+err.message),
+    { enableHighAccuracy:true, timeout:10000, maximumAge:0 }
+  );
+}
+
+// ---------- Geocoding (Nominatim) ----------
+async function geocode(query){
+  const url = `${NOMINATIM}?format=json&limit=5&addressdetails=1&countrycodes=de,at,ch&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers:{ "Accept-Language":"de" } });
+  if(!res.ok) throw new Error("Suche fehlgeschlagen");
+  return res.json();
+}
+
+function showSuggestions(list){
+  const box = document.getElementById("suggestions");
+  if(!list.length){ box.classList.add("hidden"); box.innerHTML=""; return; }
+  box.innerHTML = "";
+  list.forEach(item => {
+    const div = document.createElement("div");
+    div.textContent = item.display_name;
+    div.onclick = () => {
+      document.getElementById("dest").value = item.display_name.split(",")[0];
+      box.classList.add("hidden");
+      setDest([parseFloat(item.lat), parseFloat(item.lon)], item.display_name.split(",")[0]);
+    };
+    box.appendChild(div);
+  });
+  box.classList.remove("hidden");
+}
+
+// ---------- Routing (ORS, meidet Autobahn/Schnellstraße) ----------
+async function route(){
+  const key = getKey();
+  if(!key){ openSettings(); toast("Bitte zuerst API-Key eintragen."); return; }
+  if(!startLatLng){ toast("Kein Startpunkt – tippe auf 📍."); locate(false); return; }
+  if(!destLatLng){ toast("Kein Ziel ausgewählt."); return; }
+
+  toast("Berechne rollertaugliche Route…");
+  const body = {
+    coordinates: [
+      [startLatLng[1], startLatLng[0]],
+      [destLatLng[1], destLatLng[0]]
+    ],
+    // highways = Autobahn/Schnellstraße, ferries = Fähren
+    options: { avoid_features: ["highways", "ferries"] },
+    instructions: true,
+    language: "de"
+  };
+  try {
+    const res = await fetch(ORS_BASE, {
+      method:"POST",
+      headers:{ "Authorization": key, "Content-Type":"application/json", "Accept":"application/json" },
+      body: JSON.stringify(body)
+    });
+    if(res.status === 403 || res.status === 401){ toast("API-Key ungültig."); openSettings(); return; }
+    if(!res.ok){
+      const txt = await res.text();
+      throw new Error("ORS "+res.status+": "+txt.slice(0,120));
+    }
+    const data = await res.json();
+    drawRoute(data);
+  } catch(e){
+    toast("Routing-Fehler: "+e.message, 4000);
+  }
+}
+
+function drawRoute(geojson){
+  if(routeLayer) map.removeLayer(routeLayer);
+  routeLayer = L.geoJSON(geojson, { style:{ color:"#1b5e20", weight:6, opacity:.85 } }).addTo(map);
+  map.fitBounds(routeLayer.getBounds(), { padding:[40,40] });
+
+  const feat = geojson.features[0];
+  const summary = feat.properties.summary;
+  document.getElementById("rDist").textContent = fmtDist(summary.distance);
+  document.getElementById("rTime").textContent = "ca. "+fmtDur(summary.duration)+" (Roller bis 45 km/h kann abweichen)";
+
+  const stepsBox = document.getElementById("steps");
+  stepsBox.innerHTML = "";
+  const steps = (feat.properties.segments||[]).flatMap(s => s.steps||[]);
+  steps.forEach(st => {
+    const div = document.createElement("div");
+    div.className = "step";
+    div.innerHTML = `<span class="dist">${fmtDist(st.distance)}</span><span>${st.instruction}</span>`;
+    stepsBox.appendChild(div);
+  });
+  document.getElementById("routeInfo").classList.remove("hidden");
+}
+
+// ---------- Settings ----------
+function openSettings(){
+  document.getElementById("apiKeyInput").value = getKey();
+  document.getElementById("settings").classList.remove("hidden");
+}
+function closeSettings(){ document.getElementById("settings").classList.add("hidden"); }
+
+// ---------- Events ----------
+document.addEventListener("DOMContentLoaded", () => {
+  initMap();
+
+  document.getElementById("btnSettings").onclick = openSettings;
+  document.getElementById("btnCancelKey").onclick = closeSettings;
+  document.getElementById("btnSaveKey").onclick = () => {
+    const v = document.getElementById("apiKeyInput").value.trim();
+    localStorage.setItem("orsKey", v);
+    closeSettings();
+    toast(v ? "API-Key gespeichert." : "API-Key gelöscht.");
+  };
+
+  document.getElementById("btnLocate").onclick = () => locate(true);
+  document.getElementById("btnRoute").onclick = route;
+  document.getElementById("btnCloseRoute").onclick = () =>
+    document.getElementById("routeInfo").classList.add("hidden");
+
+  const destInput = document.getElementById("dest");
+  destInput.addEventListener("input", () => {
+    const q = destInput.value.trim();
+    clearTimeout(suggestTimer);
+    if(q.length < 3){ document.getElementById("suggestions").classList.add("hidden"); return; }
+    suggestTimer = setTimeout(async () => {
+      try { showSuggestions(await geocode(q)); } catch(e){ /* ignore */ }
+    }, 450);
+  });
+  destInput.addEventListener("keydown", e => {
+    if(e.key === "Enter"){
+      e.preventDefault();
+      clearTimeout(suggestTimer);
+      geocode(destInput.value.trim()).then(list => { if(list[0]){
+        showSuggestions([]);
+        setDest([parseFloat(list[0].lat), parseFloat(list[0].lon)], list[0].display_name.split(",")[0]);
+      }});
+    }
+  });
+
+  // Try to get location on start; ask for key if none
+  locate(true);
+  if(!getKey()) setTimeout(openSettings, 800);
+});
+</script>
+</body>
+</html>
